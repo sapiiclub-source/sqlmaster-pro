@@ -6,13 +6,11 @@ import 'screens/home_screen.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  AppState appState;
-  try {
-    appState = AppState();
-    await appState.init();
-  } catch (e) {
-    appState = AppState();
-  }
+  // Crear el estado SIN await — la app arranca inmediatamente
+  final appState = AppState();
+
+  // Lanzar init en background (no bloquea el arranque)
+  appState.init();
 
   runApp(SQLMasterApp(state: appState));
 }
@@ -31,7 +29,7 @@ class SQLMasterApp extends StatelessWidget {
         primaryColor: AppColors.primary,
         scaffoldBackgroundColor: AppColors.background,
         cardColor: AppColors.surface,
-        colorScheme: const ColorScheme.dark(
+        colorScheme: ColorScheme.dark(
           primary: AppColors.primary,
           secondary: AppColors.accent,
           surface: AppColors.surface,
