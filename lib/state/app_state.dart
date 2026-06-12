@@ -1,6 +1,6 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:sqflite/sqflite.dart';
-import 'package:path/path.dart' as path_helper;
+import 'package:shared_preferences/shared_preferences.dart';
 import '../data/course_content.dart';
 
 // ─── Models ──────────────────────────────────────────────────────────────────
@@ -151,7 +151,6 @@ class AppState extends ChangeNotifier {
   int currentQuizIndex = 0;
   List<bool> quizAnswers = [];
   int quizXpEarned = 0;
-  Database? _db;
 
   // ─── Getters ───────────────────────────────────────────────────────────────
 
@@ -166,8 +165,6 @@ class AppState extends ChangeNotifier {
 
   List<String> get unlockedAchievements => _progress.unlockedAchievements;
 
-  /// Returns a list of 7 integers (Mon–Sun) representing lessons completed per day
-  /// in the current week. Placeholder implementation returns zeros.
   List<int> get weeklyActivity => List<int>.filled(7, 0);
 
   // ─── Convenience getters for UI screens ──────────────────────────────────
@@ -178,7 +175,6 @@ class AppState extends ChangeNotifier {
   int get streakDays => _progress.currentStreak;
   int get bestStreak => _progress.longestStreak;
 
-  /// Current numeric level derived from totalXp.
   int get level {
     final xp = _progress.totalXp;
     if (xp < 100) return 1;
@@ -215,16 +211,12 @@ class AppState extends ChangeNotifier {
 
   int get completedLessons => _completedIds.length;
 
-  /// Average score placeholder (0–100). Returns 0 until score tracking is implemented.
   double get avgScore => 0.0;
 
-  /// Total quiz questions answered (placeholder).
   int get totalAnswered => 0;
 
-  /// Total correct quiz answers (placeholder).
   int get correctAnswers => 0;
 
-  /// Next lesson not yet completed, or null if all done.
   Lesson? get nextIncompleteLesson {
     try {
       return _lessons.firstWhere((l) => !isLessonCompleted(l.id));
@@ -233,7 +225,6 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  /// Per-world progress summary used by ProgresoScreen.
   List<_MundoProgress> get mundos {
     const worldNames = [
       'Mundo 1: SELECT Básico',
@@ -278,10 +269,8 @@ class AppState extends ChangeNotifier {
     final lesson = lessonById(id);
     if (lesson == null) return false;
 
-    // Mundo 1 siempre disponible
     if (lesson.worldNumber == 1) {
       if (lesson.lessonNumber == 1) return true;
-      // Dentro del mundo, desbloqueo secuencial
       final prev = _lessons.firstWhere(
         (l) => l.worldNumber == 1 && l.lessonNumber == lesson.lessonNumber - 1,
         orElse: () => lesson,
@@ -290,13 +279,11 @@ class AppState extends ChangeNotifier {
       return isLessonCompleted(prev.id);
     }
 
-    // Otros mundos: el mundo anterior debe estar 100% completado
     final prevWorldLessons = worldLessons(lesson.worldNumber - 1);
     final prevWorldComplete = prevWorldLessons.isNotEmpty &&
         prevWorldLessons.every((l) => isLessonCompleted(l.id));
     if (!prevWorldComplete) return false;
 
-    // Desbloqueo secuencial dentro del mundo
     if (lesson.lessonNumber == 1) return true;
     final prevInWorld = _lessons.firstWhere(
       (l) =>
@@ -315,111 +302,53 @@ class AppState extends ChangeNotifier {
   Future<void> init() async {
     isLoading = true;
     notifyListeners();
-
-    // DB y progreso — puede fallar en web, no importa
-    try {
-      await _initDb();
-      await _loadProgress();
-    } catch (_) {}
-
-    // Lecciones — SIEMPRE debe ejecutarse
-    try {
-      await _loadLessons();
-    } catch (_) {}
-
+    try { await _loadProgress(); } catch (_) {}
+    try { await _loadLessons(); } catch (_) {}
     isLoading = false;
     notifyListeners();
-  }
-
-  // ─── Database init ────────────────────────────────────────────────────────
-
-  Future<void> _initDb() async {
-    final dbPath = await getDatabasesPath();
-    final fullPath = path_helper.join(dbPath, 'sqlmaster.db');
-
-    _db = await openDatabase(
-      fullPath,
-      version: 1,
-      onCreate: (db, version) async {
-        await db.execute('''
-          CREATE TABLE IF NOT EXISTS user_progress (
-            id INTEGER PRIMARY KEY,
-            total_xp INTEGER NOT NULL DEFAULT 0,
-            current_streak INTEGER NOT NULL DEFAULT 0,
-            longest_streak INTEGER NOT NULL DEFAULT 0,
-            last_activity_date TEXT,
-            completed_lessons INTEGER NOT NULL DEFAULT 0
-          )
-        ''');
-
-        await db.execute('''
-          CREATE TABLE IF NOT EXISTS completed_lessons (
-            lesson_id TEXT PRIMARY KEY,
-            score INTEGER NOT NULL DEFAULT 0,
-            xp_earned INTEGER NOT NULL DEFAULT 0,
-            completed_at TEXT NOT NULL
-          )
-        ''');
-
-        await db.execute('''
-          CREATE TABLE IF NOT EXISTS achievements (
-            achievement_id TEXT PRIMARY KEY,
-            unlocked_at TEXT NOT NULL
-          )
-        ''');
-
-        await db.execute('''
-          CREATE TABLE IF NOT EXISTS sandbox_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            sql_query TEXT NOT NULL,
-            executed_at TEXT NOT NULL
-          )
-        ''');
-
-        // Fila inicial de progreso
-        await db.insert('user_progress', {
-          'id': 1,
-          'total_xp': 0,
-          'current_streak': 0,
-          'longest_streak': 0,
-          'last_activity_date': null,
-          'completed_lessons': 0,
-        });
-      },
-    );
   }
 
   // ─── Load progress ────────────────────────────────────────────────────────
 
   Future<void> _loadProgress() async {
-    if (_db == null) return;
+    final prefs = await SharedPreferences.getInstance();
 
-    final rows = await _db!.query('user_progress', where: 'id = ?', whereArgs: [1]);
-    final achievementRows = await _db!.query('achievements');
-    final completedRows = await _db!.query('completed_lessons');
-
-    final achievements = achievementRows
-        .map((r) => r['achievement_id'] as String)
-        .toList();
-
-    _completedIds = completedRows
-        .map((r) => r['lesson_id'] as String)
-        .toSet();
-
-    if (rows.isNotEmpty) {
-      _progress = UserProgress.fromMap(rows.first, achievements);
+    final completedJson = prefs.getString('completed_ids');
+    if (completedJson != null) {
+      final List<dynamic> list = jsonDecode(completedJson) as List<dynamic>;
+      _completedIds = list.map((e) => e as String).toSet();
     }
+
+    final achievementsJson = prefs.getString('unlocked_achievements');
+    List<String> achievements = [];
+    if (achievementsJson != null) {
+      final List<dynamic> list = jsonDecode(achievementsJson) as List<dynamic>;
+      achievements = list.map((e) => e as String).toList();
+    }
+
+    final progressMap = <String, dynamic>{
+      'total_xp': prefs.getInt('total_xp') ?? 0,
+      'current_streak': prefs.getInt('current_streak') ?? 0,
+      'longest_streak': prefs.getInt('longest_streak') ?? 0,
+      'last_activity_date': prefs.getString('last_activity_date'),
+      'completed_lessons': _completedIds.length,
+    };
+
+    _progress = UserProgress.fromMap(progressMap, achievements);
   }
 
   // ─── Save progress ────────────────────────────────────────────────────────
 
   Future<void> _saveProgress() async {
-    if (_db == null) return;
-    await _db!.insert(
-      'user_progress',
-      {'id': 1, ..._progress.toMap()},
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('total_xp', _progress.totalXp);
+    await prefs.setInt('current_streak', _progress.currentStreak);
+    await prefs.setInt('longest_streak', _progress.longestStreak);
+    if (_progress.lastActivityDate != null) {
+      await prefs.setString('last_activity_date', _progress.lastActivityDate!.toIso8601String());
+    }
+    await prefs.setString('completed_ids', jsonEncode(_completedIds.toList()));
+    await prefs.setString('unlocked_achievements', jsonEncode(_progress.unlockedAchievements));
   }
 
   // ─── Load lessons ─────────────────────────────────────────────────────────
@@ -431,10 +360,8 @@ class AppState extends ChangeNotifier {
       try {
         final id = item['id'] as String? ?? '';
         final world = (item['world'] as int?) ?? 1;
-        // Extraer número de lección del id: n1_l3 → 3
         final lessonNum = int.tryParse(id.split('_l').last) ?? 1;
 
-        // Construir theoryContent desde theoryPages
         final pages = item['theoryPages'] as List? ?? [];
         final theoryContent = pages.map((p) {
           final t = p['title'] ?? '';
@@ -447,7 +374,6 @@ class AppState extends ChangeNotifier {
           return buffer.toString();
         }).join('\n\n');
 
-        // Construir questions desde quizQuestions
         final quizList = item['quizQuestions'] as List? ?? [];
         final questions = quizList.map((q) {
           final opts = List<String>.from(q['options'] as List? ?? []);
@@ -476,9 +402,7 @@ class AppState extends ChangeNotifier {
           theoryContent: theoryContent,
           estimatedMinutes: 10,
         ));
-      } catch (_) {
-        // Ignorar lecciones con error de parseo
-      }
+      } catch (_) {}
     }
 
     all.sort((a, b) {
@@ -511,21 +435,6 @@ class AppState extends ChangeNotifier {
   // ─── Complete lesson ──────────────────────────────────────────────────────
 
   Future<void> completeLesson(String id, int score, int xp) async {
-    if (_db == null) return;
-
-    final now = DateTime.now();
-
-    await _db!.insert(
-      'completed_lessons',
-      {
-        'lesson_id': id,
-        'score': score,
-        'xp_earned': xp,
-        'completed_at': now.toIso8601String(),
-      },
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
-
     _completedIds.add(id);
 
     _progress = _progress.copyWith(
@@ -541,32 +450,27 @@ class AppState extends ChangeNotifier {
   // ─── Unlock achievement ───────────────────────────────────────────────────
 
   Future<void> unlockAchievement(String id) async {
-    if (_db == null) return;
     if (_progress.unlockedAchievements.contains(id)) return;
-
-    final now = DateTime.now();
-    await _db!.insert(
-      'achievements',
-      {
-        'achievement_id': id,
-        'unlocked_at': now.toIso8601String(),
-      },
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
 
     final updated = List<String>.from(_progress.unlockedAchievements)..add(id);
     _progress = _progress.copyWith(unlockedAchievements: updated);
+    await _saveProgress();
     notifyListeners();
   }
 
   // ─── Sandbox history ──────────────────────────────────────────────────────
 
   Future<void> addSandboxQuery(String sql) async {
-    if (_db == null) return;
-    await _db!.insert('sandbox_history', {
-      'sql_query': sql,
-      'executed_at': DateTime.now().toIso8601String(),
-    });
+    final prefs = await SharedPreferences.getInstance();
+    final existing = prefs.getString('sandbox_history');
+    List<String> history = [];
+    if (existing != null) {
+      final List<dynamic> list = jsonDecode(existing) as List<dynamic>;
+      history = list.map((e) => e as String).toList();
+    }
+    history.insert(0, sql);
+    if (history.length > 20) history = history.sublist(0, 20);
+    await prefs.setString('sandbox_history', jsonEncode(history));
   }
 
   // ─── Streak ───────────────────────────────────────────────────────────────
@@ -584,11 +488,10 @@ class AppState extends ChangeNotifier {
       final lastDay = DateTime(last.year, last.month, last.day);
       final diff = today.difference(lastDay).inDays;
       if (diff == 0) {
-        // Mismo día, no cambiar racha
+        // same day, no change
       } else if (diff == 1) {
         newStreak = _progress.currentStreak + 1;
       } else {
-        // Se rompió la racha
         newStreak = 1;
       }
     }
