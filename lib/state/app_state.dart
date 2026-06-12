@@ -316,16 +316,19 @@ class AppState extends ChangeNotifier {
     isLoading = true;
     notifyListeners();
 
+    // DB y progreso — puede fallar en web, no importa
     try {
       await _initDb();
       await _loadProgress();
+    } catch (_) {}
+
+    // Lecciones — SIEMPRE debe ejecutarse
+    try {
       await _loadLessons();
-    } catch (e) {
-      // Continuar con datos vacíos si hay error
-    } finally {
-      isLoading = false;
-      notifyListeners();
-    }
+    } catch (_) {}
+
+    isLoading = false;
+    notifyListeners();
   }
 
   // ─── Database init ────────────────────────────────────────────────────────
