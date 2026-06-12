@@ -35,12 +35,12 @@ jobs:
       - name: Instalar dependencias
         run: flutter pub get
 
-      - name: Compilar APK
-        run: flutter build apk --release --split-per-abi
+      - name: Compilar APK debug
+        run: flutter build apk --debug
 
       - name: Subir APK
         uses: actions/upload-artifact@v4
         with:
-          name: SQLMasterPro-APK
-          path: build/app/outputs/flutter-apk/*.apk
+          name: SQLMasterPro-APK-debug
+          path: build/app/outputs/flutter-apk/app-debug.apk
           retention-days: 30
