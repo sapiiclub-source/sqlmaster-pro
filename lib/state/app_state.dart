@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart' as path_helper;
-import 'dart:convert';
+import '../data/course_content.dart';
 
 // ─── Models ──────────────────────────────────────────────────────────────────
 
@@ -425,24 +424,57 @@ class AppState extends ChangeNotifier {
   Future<void> _loadLessons() async {
     final List<Lesson> all = [];
 
-    // 5 archivos JSON: world1.json … world5.json en assets/content/
-    for (int w = 1; w <= 5; w++) {
+    for (final item in courseData) {
       try {
-        final raw = await rootBundle.loadString('assets/content/world$w.json');
-        final data = json.decode(raw);
-        List<dynamic> lessonList;
-        if (data is List) {
-          lessonList = data;
-        } else if (data is Map && data.containsKey('lessons')) {
-          lessonList = data['lessons'] as List;
-        } else {
-          lessonList = [];
-        }
-        for (final item in lessonList) {
-          all.add(Lesson.fromJson(item as Map<String, dynamic>));
-        }
+        final id = item['id'] as String? ?? '';
+        final world = (item['world'] as int?) ?? 1;
+        // Extraer número de lección del id: n1_l3 → 3
+        final lessonNum = int.tryParse(id.split('_l').last) ?? 1;
+
+        // Construir theoryContent desde theoryPages
+        final pages = item['theoryPages'] as List? ?? [];
+        final theoryContent = pages.map((p) {
+          final t = p['title'] ?? '';
+          final c = p['content'] ?? '';
+          final code = p['code'];
+          final key = p['keyConcept'];
+          final buffer = StringBuffer('## $t\n$c');
+          if (code != null) buffer.write('\n```\n$code\n```');
+          if (key != null) buffer.write('\n> $key');
+          return buffer.toString();
+        }).join('\n\n');
+
+        // Construir questions desde quizQuestions
+        final quizList = item['quizQuestions'] as List? ?? [];
+        final questions = quizList.map((q) {
+          final opts = List<String>.from(q['options'] as List? ?? []);
+          final correct = q['correct'];
+          final correctIndex = correct is int ? correct : int.tryParse(correct?.toString() ?? '0') ?? 0;
+          return QuizQuestion(
+            id: '${id}_q${quizList.indexOf(q)}',
+            question: q['question'] as String? ?? '',
+            options: opts,
+            correctIndex: correctIndex,
+            explanation: q['explanation'] as String? ?? '',
+            codeSnippet: q['code'] as String?,
+          );
+        }).toList();
+
+        all.add(Lesson(
+          id: id,
+          worldId: 'world$world',
+          worldNumber: world,
+          lessonNumber: lessonNum,
+          title: item['title'] as String? ?? '',
+          description: item['objective'] as String? ?? '',
+          emoji: _iconToEmoji(item['icon'] as String? ?? ''),
+          xpReward: (item['xpReward'] as int?) ?? 100,
+          questions: questions,
+          theoryContent: theoryContent,
+          estimatedMinutes: 10,
+        ));
       } catch (_) {
-        // El archivo puede no existir aún; continuar
+        // Ignorar lecciones con error de parseo
       }
     }
 
@@ -453,6 +485,24 @@ class AppState extends ChangeNotifier {
     });
 
     _lessons = all;
+  }
+
+  String _iconToEmoji(String icon) {
+    const map = {
+      'help_outline': '❓', 'table_rows': '📋', 'filter_alt': '🔍',
+      'sort': '↕️', 'functions': '∑', 'group_work': '👥',
+      'rule': '📏', 'emoji_events': '🏆', 'join_inner': '🔗',
+      'join_left': '⬅️', 'join_full': '↔️', 'layers': '📚',
+      'account_tree': '🌳', 'alt_route': '🔀', 'text_fields': '🔤',
+      'calendar_today': '📅', 'view_list': '📊', 'swap_vert': '⇅',
+      'table_chart': '📈', 'speed': '⚡', 'sync_alt': '🔄',
+      'visibility': '👁️', 'code': '💻', 'tune': '⚙️',
+      'data_object': '{}', 'device_hub': '🔀', 'bug_report': '🐛',
+      'settings': '⚙️', 'flash_on': '⚡', 'new_releases': '🆕',
+      'integration_instructions': '📝', 'manage_search': '🔎',
+      'repeat': '🔁', 'event': '📆', 'compare_arrows': '⇔',
+    };
+    return map[icon] ?? '📘';
   }
 
   // ─── Complete lesson ──────────────────────────────────────────────────────
